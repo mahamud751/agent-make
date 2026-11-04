@@ -1,0 +1,18 @@
+{
+  "name": "agentdesk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-tenant AI agent SaaS: auto-replies to customers and manages orders for any connected website.",
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev:api": "npm run dev -w @agentdesk/api",
+    "dev:worker": "npm run dev:worker -w @agentdesk/api",
+    "dev:dashboard": "npm run dev -w @agentdesk/dashboard",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "db:migrate": "npm run db:migrate -w @agentdesk/api",
+    "db:seed": "npm run db:seed -w @agentdesk/api"
+  },
+  "engines": { "node": ">=20" }
+}
