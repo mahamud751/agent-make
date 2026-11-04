@@ -1,4 +1,5 @@
 import express, { type Request } from "express";
+import path from "node:path";
 import helmet from "helmet";
 import cors from "cors";
 import { pinoHttp } from "pino-http";
@@ -40,6 +41,9 @@ export function createApp() {
     await prisma.$queryRaw`SELECT 1`;
     res.json({ ok: true });
   });
+
+  // Embeddable widget bundle: <script src="https://api.example.com/agentdesk.js">
+  app.use(express.static(env.WIDGET_DIST_DIR ?? path.resolve(process.cwd(), "../widget/dist"), { maxAge: "1h", index: false }));
 
   // Public (signature-verified) webhooks
   app.use("/v1/inbound", rateLimit({ prefix: "inbound", windowSec: 60, max: 2000 }), inboundRouter);

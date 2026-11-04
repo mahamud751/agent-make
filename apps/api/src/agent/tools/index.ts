@@ -145,7 +145,7 @@ export const TOOLS: ToolDef[] = [
   }),
   defineTool({
     name: "request_refund",
-    description: "Refund all or part of a paid order for the verified customer (e.g. damaged or missing item). Omit amount for a full refund of the remaining balance.",
+    description: "Refund all or part of a paid order for the verified customer — for example a damaged or missing item. Omit amount for a full refund of the remaining balance.",
     schema: z.object({ order_number: orderNumber, amount: z.number().positive().optional(), reason: z.string().min(2).max(500) }),
     inputSchema: {
       type: "object",

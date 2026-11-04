@@ -204,3 +204,16 @@ describe("AI agent", () => {
     expect(chat.messages.at(-1)!.role).toBe("AGENT");
   });
 });
+
+describe("resilience", () => {
+  it("falls back to a human when the model keeps failing", async () => {
+    const s = await storeWithOrder();
+    setLLM(async () => {
+      throw new Error("model unavailable");
+    });
+    const chat = await widgetSay(s.pk, "hello");
+    expect(chat.status).toBe("PENDING_HUMAN");
+    expect(chat.messages.at(-1)!.content).toMatch(/passed this to our team/);
+    expect(await prisma.agentRun.count({ where: { tenantId: s.tenantId, error: { not: null } } })).toBe(1);
+  });
+});

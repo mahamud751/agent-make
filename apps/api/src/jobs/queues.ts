@@ -22,6 +22,13 @@ export function registerHandler<N extends JobName>(name: N, h: Handler<N>) {
 }
 export const getHandler = <N extends JobName>(name: N) => handlers[name] as Handler<N> | undefined;
 
+/** Called once a job has exhausted all retries (e.g. tell the customer a human will follow up). */
+const failureHandlers: Partial<{ [N in JobName]: Handler<N> }> = {};
+export function registerFailureHandler<N extends JobName>(name: N, h: Handler<N>) {
+  (failureHandlers as Record<string, unknown>)[name] = h;
+}
+export const getFailureHandler = <N extends JobName>(name: N) => failureHandlers[name] as Handler<N> | undefined;
+
 export const QUEUE_NAME = "agentdesk";
 let queue: Queue | null = null;
 const getQueue = () => (queue ??= new Queue(QUEUE_NAME, { connection: getRedis() }));
@@ -40,7 +47,10 @@ export async function enqueue<N extends JobName>(name: N, data: JobPayloads[N], 
       if (opts.delayMs) await new Promise((r) => setTimeout(r, Math.min(opts.delayMs!, 50)));
       await h(data);
     })()
-      .catch((err) => logger.error({ err, name }, "inline job failed"))
+      .catch(async (err) => {
+        logger.error({ err, name }, "inline job failed");
+        await getFailureHandler(name)?.(data).catch(() => {});
+      })
       .finally(() => pending.delete(p));
     pending.add(p);
     return;

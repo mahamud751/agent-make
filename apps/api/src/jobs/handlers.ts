@@ -1,5 +1,5 @@
-import { registerHandler } from "./queues";
-import { runAgentTurn } from "../agent/runtime";
+import { registerFailureHandler, registerHandler } from "./queues";
+import { handleAgentFailure, runAgentTurn } from "../agent/runtime";
 import { deliverWebhook } from "../modules/webhooks/delivery";
 import { runAutomations } from "../modules/automations/engine";
 import { approvalService } from "../modules/approvals/service";
@@ -21,5 +21,6 @@ export function registerJobHandlers() {
     if (a) await approvalService.approve(a.tenantId, actionId, userId);
   });
   registerHandler("email.send", async (job) => sendEmail(job));
+  registerFailureHandler("agent.reply", async ({ conversationId }) => handleAgentFailure(conversationId));
   registerHandler("whatsapp.send", async (job) => sendWhatsApp(job));
 }

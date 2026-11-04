@@ -3,7 +3,7 @@ import { env } from "./config/env";
 import { logger } from "./lib/logger";
 import { getRedis } from "./lib/redis";
 import { prisma } from "./lib/prisma";
-import { QUEUE_NAME, getHandler, type JobName } from "./jobs/queues";
+import { QUEUE_NAME, getFailureHandler, getHandler, type JobName } from "./jobs/queues";
 import { registerJobHandlers } from "./jobs/handlers";
 
 registerJobHandlers();
@@ -22,7 +22,12 @@ const worker = new Worker(
   { connection: getRedis(), concurrency: Number(process.env.WORKER_CONCURRENCY ?? 20) },
 );
 
-worker.on("failed", (job, err) => logger.error({ jobId: job?.id, name: job?.name, attempts: job?.attemptsMade, err: err.message }, "job failed"));
+worker.on("failed", async (job, err) => {
+  logger.error({ jobId: job?.id, name: job?.name, attempts: job?.attemptsMade, err: err.message }, "job failed");
+  if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+    await getFailureHandler(job.name as JobName)?.(job.data as never).catch((e) => logger.error({ err: e }, "failure handler failed"));
+  }
+});
 worker.on("completed", (job) => logger.debug({ jobId: job.id, name: job.name }, "job completed"));
 logger.info(`AgentDesk worker started (concurrency ${worker.opts.concurrency}, redis ${env.REDIS_URL.replace(/\/\/.*@/, "//***@")})`);
 

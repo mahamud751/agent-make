@@ -1,0 +1,39 @@
+# Local full stack: docker compose up --build
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: agentdesk }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 5s, retries: 10 }
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agentdesk
+      REDIS_URL: redis://redis:6379
+      INLINE_JOBS: "false"
+    ports: ["4000:4000"]
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_started } }
+  worker:
+    build: .
+    command: ["node", "dist/worker.js"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agentdesk
+      REDIS_URL: redis://redis:6379
+      INLINE_JOBS: "false"
+    deploy: { replicas: 2 }
+    depends_on: [api]
+  dashboard:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./apps/dashboard/dist:/usr/share/nginx/html:ro
+    ports: ["8080:80"]
+    depends_on: [api]
+volumes:
+  pgdata:

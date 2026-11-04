@@ -25,6 +25,8 @@ const schema = z.object({
     .default("false")
     .transform((v) => v === "true"),
   LOG_LEVEL: z.string().default("info"),
+  WIDGET_DIST_DIR: z.string().optional(),
+  PLATFORM_ADMIN_EMAILS: z.string().default(""),
 });
 
 export type Env = z.infer<typeof schema>;

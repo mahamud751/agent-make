@@ -260,3 +260,13 @@ async function executeToolCall(
     is_error: !result.ok,
   };
 }
+
+/** All retries failed (model outage, bad credentials…): never leave the customer hanging. */
+export async function handleAgentFailure(conversationId: string) {
+  const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
+  if (!conv || conv.status !== "OPEN") return;
+  const last = await prisma.message.findFirst({ where: { conversationId }, orderBy: { createdAt: "desc" } });
+  if (last?.role !== "CUSTOMER") return;
+  await conversationService.escalate(conv, "AI agent unavailable (reply failed after retries)");
+  await conversationService.addMessage(conv, "AGENT", FALLBACK_REPLY, { metadata: { failure: true } });
+}
