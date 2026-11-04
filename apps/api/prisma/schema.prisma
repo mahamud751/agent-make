@@ -1,0 +1,482 @@
+// AgentDesk — multi-tenant AI agent SaaS.
+// Every tenant-owned row carries `tenantId` and every query in the API is scoped by it.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Tenancy & identity ─────────────────────────────
+
+enum PlanTier {
+  FREE
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+model Tenant {
+  id                 String             @id @default(cuid())
+  name               String
+  slug               String             @unique
+  plan               PlanTier           @default(FREE)
+  subscriptionStatus SubscriptionStatus @default(TRIALING)
+  stripeCustomerId   String?            @unique
+  stripeSubId        String?
+  timezone           String             @default("UTC")
+  settings           Json               @default("{}")
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  memberships   Membership[]
+  apiKeys       ApiKey[]
+  agents        Agent[]
+  knowledge     KnowledgeArticle[]
+  integrations  Integration[]
+  customers     Customer[]
+  products      Product[]
+  orders        Order[]
+  conversations Conversation[]
+  webhooks      WebhookEndpoint[]
+  automations   AutomationRule[]
+  approvals     PendingAction[]
+  usage         UsageRecord[]
+  auditLogs     AuditLog[]
+  agentRuns     AgentRun[]
+  invites       Invite[]
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime     @default(now())
+  memberships  Membership[]
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  SUPPORT // human agent: inbox, orders, approvals
+  VIEWER
+}
+
+model Membership {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  role      Role     @default(SUPPORT)
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+}
+
+model Invite {
+  id        String    @id @default(cuid())
+  tenantId  String
+  email     String
+  role      Role      @default(SUPPORT)
+  tokenHash String    @unique
+  expiresAt DateTime
+  acceptedAt DateTime?
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+enum ApiKeyKind {
+  SECRET // server-to-server: full tenant API (orders sync, messages)
+  PUBLISHABLE // browser widget: chat only, origin-restricted
+}
+
+model ApiKey {
+  id             String     @id @default(cuid())
+  tenantId       String
+  name           String
+  kind           ApiKeyKind
+  prefix         String // first chars shown in dashboard, e.g. sk_live_ab12
+  keyHash        String     @unique
+  allowedOrigins String[]   @default([])
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime   @default(now())
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// ───────────────────────────── Agents & knowledge ─────────────────────────────
+
+enum ActionPolicy {
+  AUTO // agent may execute directly
+  APPROVAL // agent proposes; a human approves in the dashboard
+  DISABLED // tool is not exposed to the model
+}
+
+model Agent {
+  id            String   @id @default(cuid())
+  tenantId      String
+  name          String
+  isDefault     Boolean  @default(false)
+  persona       String   @default("A friendly, concise customer support agent.")
+  instructions  String   @default("")
+  language      String   @default("auto")
+  model         String   @default("claude-opus-5-5")
+  effort        String   @default("medium")
+  autoReply     Boolean  @default(true)
+  // tool name -> ActionPolicy, e.g. {"cancel_order":"APPROVAL"}
+  toolPolicies  Json     @default("{}")
+  // e.g. {"maxRefundAmount":100,"handoffKeywords":["lawyer"],"businessHours":{...}}
+  guardrails    Json     @default("{}")
+  greeting      String   @default("Hi! How can I help you today?")
+  widgetTheme   Json     @default("{}")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@index([tenantId])
+}
+
+model KnowledgeArticle {
+  id        String   @id @default(cuid())
+  tenantId  String
+  title     String
+  content   String
+  tags      String[] @default([])
+  published Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+// ───────────────────────────── Commerce ─────────────────────────────
+
+enum IntegrationType {
+  NATIVE // orders live in AgentDesk, pushed via REST API / SDK
+  SHOPIFY
+  WOOCOMMERCE
+  CUSTOM_WEBHOOK // AgentDesk calls the client's own REST endpoints
+}
+
+model Integration {
+  id              String          @id @default(cuid())
+  tenantId        String
+  type            IntegrationType
+  name            String
+  // encrypted JSON (AES-256-GCM) — shop domain, tokens, base URLs, signing secret
+  configEncrypted String
+  active          Boolean         @default(true)
+  lastSyncAt      DateTime?
+  lastError       String?
+  createdAt       DateTime        @default(now())
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model Customer {
+  id            String         @id @default(cuid())
+  tenantId      String
+  externalId    String?
+  email         String?
+  phone         String?
+  name          String?
+  metadata      Json           @default("{}")
+  createdAt     DateTime       @default(now())
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orders        Order[]
+  conversations Conversation[]
+
+  @@unique([tenantId, externalId])
+  @@index([tenantId, email])
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  tenantId    String
+  externalId  String?
+  sku         String
+  name        String
+  description String   @default("")
+  price       Decimal  @db.Decimal(12, 2)
+  currency    String   @default("USD")
+  stock       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderItems  OrderItem[]
+
+  @@unique([tenantId, sku])
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+  ON_HOLD
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+  FAILED
+}
+
+model Order {
+  id              String        @id @default(cuid())
+  tenantId        String
+  number          String // human-facing order number, e.g. "1042"
+  externalId      String?
+  source          IntegrationType @default(NATIVE)
+  customerId      String?
+  status          OrderStatus   @default(PENDING)
+  paymentStatus   PaymentStatus @default(UNPAID)
+  currency        String        @default("USD")
+  subtotal        Decimal       @db.Decimal(12, 2)
+  shippingTotal   Decimal       @default(0) @db.Decimal(12, 2)
+  total           Decimal       @db.Decimal(12, 2)
+  refundedTotal   Decimal       @default(0) @db.Decimal(12, 2)
+  shippingAddress Json?
+  trackingNumber  String?
+  carrier         String?
+  notes           String?
+  placedAt        DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer        Customer?     @relation(fields: [customerId], references: [id])
+  items           OrderItem[]
+  events          OrderEvent[]
+
+  @@unique([tenantId, number])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  productId String?
+  sku       String
+  name      String
+  quantity  Int
+  unitPrice Decimal  @db.Decimal(12, 2)
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product? @relation(fields: [productId], references: [id])
+}
+
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  type      String // status_changed, refund, note, address_changed ...
+  actor     String // "agent:<id>", "user:<id>", "api", "integration:<type>"
+  data      Json     @default("{}")
+  createdAt DateTime @default(now())
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+// ───────────────────────────── Conversations ─────────────────────────────
+
+enum Channel {
+  WEB_WIDGET
+  EMAIL
+  WHATSAPP
+  MESSENGER
+  SMS
+  API
+}
+
+enum ConversationStatus {
+  OPEN // agent handling
+  PENDING_HUMAN // escalated, waiting for a human
+  RESOLVED
+}
+
+model Conversation {
+  id               String             @id @default(cuid())
+  tenantId         String
+  agentId          String?
+  customerId       String?
+  channel          Channel            @default(WEB_WIDGET)
+  status           ConversationStatus @default(OPEN)
+  subject          String?
+  assignedUserId   String?
+  // identity the customer proved in this conversation (verified order email/number)
+  verifiedEmail    String?
+  verifyAttempts   Int                @default(0)
+  // opaque token handed to the widget so a visitor can resume this conversation
+  visitorTokenHash String?            @unique
+  externalThreadId String? // email thread id / whatsapp wa_id
+  tags             String[]           @default([])
+  lastMessageAt    DateTime           @default(now())
+  createdAt        DateTime           @default(now())
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent            Agent?             @relation(fields: [agentId], references: [id])
+  customer         Customer?          @relation(fields: [customerId], references: [id])
+  messages         Message[]
+
+  @@index([tenantId, status, lastMessageAt])
+  @@index([tenantId, externalThreadId])
+}
+
+enum MessageRole {
+  CUSTOMER
+  AGENT // AI
+  HUMAN // human support staff
+  SYSTEM // internal notes, events
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  authorUserId   String?
+  metadata       Json         @default("{}")
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model AgentRun {
+  id             String   @id @default(cuid())
+  tenantId       String
+  conversationId String
+  model          String
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  cacheReadTokens Int     @default(0)
+  toolCalls      Json     @default("[]")
+  stopReason     String?
+  latencyMs      Int      @default(0)
+  error          String?
+  createdAt      DateTime @default(now())
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
+enum PendingActionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+  FAILED
+}
+
+// Sensitive agent actions (refund / cancel) waiting for human approval.
+model PendingAction {
+  id             String              @id @default(cuid())
+  tenantId       String
+  conversationId String?
+  tool           String
+  input          Json
+  reason         String?
+  status         PendingActionStatus @default(PENDING)
+  result         Json?
+  decidedById    String?
+  decidedAt      DateTime?
+  createdAt      DateTime            @default(now())
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+}
+
+// ───────────────────────────── Automation & webhooks ─────────────────────────────
+
+model AutomationRule {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  event     String // order.created, order.status_changed, conversation.escalated ...
+  // e.g. {"status":"SHIPPED"}
+  conditions Json    @default("{}")
+  // e.g. [{"type":"notify_customer","template":"Your order {{order.number}} shipped!"}]
+  actions   Json
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, event])
+}
+
+model WebhookEndpoint {
+  id         String   @id @default(cuid())
+  tenantId   String
+  url        String
+  events     String[] // ["*"] or ["order.created", ...]
+  secret     String // used to HMAC-sign payloads (stored encrypted)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId])
+}
+
+model WebhookDelivery {
+  id           String          @id @default(cuid())
+  endpointId   String
+  event        String
+  payload      Json
+  statusCode   Int?
+  attempts     Int             @default(0)
+  succeeded    Boolean         @default(false)
+  lastError    String?
+  createdAt    DateTime        @default(now())
+  endpoint     WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, createdAt])
+}
+
+// ───────────────────────────── Billing & audit ─────────────────────────────
+
+model UsageRecord {
+  id        String   @id @default(cuid())
+  tenantId  String
+  period    String // "2026-11"
+  metric    String // ai_replies, input_tokens, output_tokens
+  quantity  Int      @default(0)
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, period, metric])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  actor     String
+  action    String
+  target    String?
+  data      Json     @default("{}")
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
